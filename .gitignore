@@ -1,3 +1,6 @@
 edu_fineweb10B/
 
 edu_fineweb10B
+gpt2_checkpoints
+__pycache__/hellaswag.cpython-39.pyc
+hellaswag/hellaswag_val.jsonl

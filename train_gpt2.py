@@ -9,6 +9,7 @@ import transformers
 import os
 import numpy as np
 from hellaswag import render_example, iterate_examples
+from torch.utils.tensorboard import SummaryWriter
 
 class CausalSelfAttention(nn.Module):
 
@@ -40,7 +41,7 @@ class CausalSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B,T,C) #concatenate heads
         y = self.c_proj(y)
         return y 
-
+ln -s /Data/lucas.mebille/gpt2_checkpoints checkpoints
 class MLP(nn.Module):
 
     def __init__(self, config):
@@ -190,10 +191,11 @@ class GPT(nn.Module):
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
         return optimizer
 
+import tiktoken
 
 def load_tokens(filename):
     npt = np.load(filename)
-    npt = npt.astype(np.int32) # added after video
+    npt = npt.astype(np.int32)
     ptt = torch.tensor(npt, dtype=torch.long)
     return ptt
 
@@ -232,15 +234,36 @@ class DataLoaderLite:
             self.current_position = B * T
         return x, y
     
+def get_most_likely_row(tokens, mask, logits):
+    # evaluate the autoregressive loss at all positions
+    shift_logits = (logits[..., :-1, :]).contiguous()
+    shift_tokens = (tokens[..., 1:]).contiguous()
+    flat_shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+    flat_shift_tokens = shift_tokens.view(-1)
+    shift_losses = F.cross_entropy(flat_shift_logits, flat_shift_tokens, reduction='none')
+    shift_losses = shift_losses.view(tokens.size(0), -1)
+    # now get the average loss just for the completion region (where mask == 1), in each row
+    shift_mask = (mask[..., 1:]).contiguous() # we must shift mask, so we start at the last prompt token
+    masked_shift_losses = shift_losses * shift_mask
+    # sum and divide by the number of 1s in the mask
+    sum_loss = masked_shift_losses.sum(dim=1)
+    avg_loss = sum_loss / shift_mask.sum(dim=1)
+    # now we have a loss for each of the 4 completions
+    # the one with the lowest loss should be the most likely
+    pred_norm = avg_loss.argmin().item()
+    return pred_norm
+
 #############
 import time 
 
 device = 'cpu'
-torch.manual_seed(420)
+torch.manual_seed(420) #seed for model init
 if torch.cuda.is_available():
     device = "cuda"
     torch.cuda.manual_seed(420)
 print(f"using device: {device}")
+
+enc = tiktoken.get_encoding("gpt2")
 
 total_batch_size = 524288 #2**19 tokens => GPT3 small 
 B = 8 #micro batch size
@@ -259,7 +282,7 @@ torch.set_float32_matmul_precision('high')  #for using TF32 on Ampere GPUs => Th
 
 model = GPT(GPTConfig(vocab_size=50304)) # we increase vocab size to 50304 to optimize for tensor cores (multiple of 256). Avoid ugly number in practice (CUDA kernels often used powers of 2 block tiles  ).
 model.to(device) 
-use_compile = False # torch.compile interferes with HellaSwag eval and Generation. TODO fix
+use_compile = False 
 if use_compile:
     model = torch.compile(model)
 # Add compilation time but increase training speed by fusing kernels (use always in production, you can skip it during research phase to have faster debugging iterations)
@@ -269,8 +292,9 @@ if use_compile:
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
-warmup_steps = 715
-max_steps = 19073
+warmup_steps = 715 #GPT3 paper
+num_epochs = 1
+max_steps = 19073 * num_epochs #10B tokens / total_batch_size
 
 def get_lr(step): #lr schedule with linear warmup and cosine decay
     if step < warmup_steps:
@@ -284,19 +308,21 @@ def get_lr(step): #lr schedule with linear warmup and cosine decay
 
 optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr, device=device) #using AdamW with weight decay
 
-# log directory to write checkpoints to and log to
-log_dir = "log"
+# Log directory
+log_dir = "/Data/lucas.mebille/gpt2_training_logs"
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, f"log.txt")
-with open(log_file, "w") as f: # open for writing to clear the file
-    pass
+writer = SummaryWriter(log_dir=log_dir)
+
+# Checkpoint directory
+checkpoint_dir = "/Data/lucas.mebille/gpt2_checkpoints"
+os.makedirs(checkpoint_dir, exist_ok=True)
 
 for step in range(max_steps):
     t0 = time.time()
     last_step = (step == max_steps - 1)
 
     # Validation and checkpointing
-    if (step % 250 == 0 and step > 0) or last_step:
+    if (step % 250 == 0 and step > 0) or last_step: #here only one epoch, but otherwise could have been used for avoiding overfitting and do early stopping
         model.eval()
         val_loader.reset()
         with torch.no_grad():
@@ -308,14 +334,12 @@ for step in range(max_steps):
                 y = y.to(device)
                 with torch.autocast(device_type=device, dtype=torch.bfloat16):  #mixed precision for validation
                     logits, val_loss = model(x, y)
-                    val_loss = val_loss / val_loss_steps
-                    val_loss_accum += val_loss.detach()
+                val_loss = val_loss / val_loss_steps
+                val_loss_accum += val_loss.detach()
             print(f"step {step}: val loss {val_loss_accum.item():.4f}")
-            with open(log_file, "a") as f:
-                f.write(f"{step} val {val_loss_accum.item():.4f}\n")
-            if step > 0 and (step % 5000 == 0 or last_step):
-                # optionally write model checkpoints
-                checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
+            writer.add_scalar("Loss/val", val_loss_accum.item(), step)
+            if (step % 5000 == 0 or last_step): # step > 0 and 
+                checkpoint_path = os.path.join(checkpoint_dir, f"model_{step:05d}.pt")
                 checkpoint = {
                     'model': model.state_dict(),
                     'config': model.config,
@@ -324,38 +348,48 @@ for step in range(max_steps):
                 }
                 torch.save(checkpoint, checkpoint_path)
     
-    """if (step % 250 == 0 or last_step) and (not use_compile):
+    if (step % 250 == 0 or last_step) and (not use_compile):
         num_correct_norm = 0
         num_total = 0
         for i, example in enumerate(iterate_examples("val")):
-            # only process examples where i % ddp_world_size == ddp_rank
-            if i % ddp_world_size != ddp_rank:
-                continue
-            # render the example into tokens and labels
             _, tokens, mask, label = render_example(example)
             tokens = tokens.to(device)
             mask = mask.to(device)
-            # get the logits
             with torch.no_grad():
-                with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+                with torch.autocast(device_type=device, dtype=torch.bfloat16):
                     logits, loss = model(tokens)
                 pred_norm = get_most_likely_row(tokens, mask, logits)
             num_total += 1
             num_correct_norm += int(pred_norm == label)
-        # reduce the stats across all processes
-        if ddp:
-            num_total = torch.tensor(num_total, dtype=torch.long, device=device)
-            num_correct_norm = torch.tensor(num_correct_norm, dtype=torch.long, device=device)
-            dist.all_reduce(num_total, op=dist.ReduceOp.SUM)
-            dist.all_reduce(num_correct_norm, op=dist.ReduceOp.SUM)
-            num_total = num_total.item()
-            num_correct_norm = num_correct_norm.item()
         acc_norm = num_correct_norm / num_total
-        if master_process:
-            print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")
-            with open(log_file, "a") as f:
-                f.write(f"{step} hella {acc_norm:.4f}\n")"""
+        print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")
+        writer.add_scalar("HellaSwag Accuracy", acc_norm, step)
     
+    if ((step > 0 and step % 250 == 0) or last_step) and (not use_compile):
+        model.eval()
+        num_return_sequences = 4
+        max_length = 32
+        tokens = enc.encode("Hello, I'm a language model,")
+        tokens = torch.tensor(tokens, dtype=torch.long)
+        tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+        xgen = tokens.to(device)
+        sample_rng = torch.Generator(device=device)
+        sample_rng.manual_seed(42 + step) #different seed at each generation step
+        while xgen.size(1) < max_length:
+            with torch.no_grad():
+                with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                    logits, loss = model(xgen) # (B, T, vocab_size)
+                logits = logits[:, -1, :] # (B, vocab_size)
+                probs = F.softmax(logits, dim=-1)
+                topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+                ix = torch.multinomial(topk_probs, 1, generator=sample_rng) # (B, 1)
+                xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
+                xgen = torch.cat((xgen, xcol), dim=1)
+        for i in range(num_return_sequences):
+            tokens = xgen[i, :max_length].tolist()
+            decoded = enc.decode(tokens)
+            print(f"Sample {i}: {decoded}")
+
     model.train()
     optimizer.zero_grad()
     loss_accum = 0.0
@@ -377,8 +411,13 @@ for step in range(max_steps):
     t1 = time.time()
     d = (t1 - t0)
     tokens_per_sec = train_loader.B * train_loader.T * grad_accum_steps / d
+    writer.add_scalar("Loss/train", loss_accum.item(), step)
+    writer.add_scalar("Learning Rate", lr, step)
+    writer.add_scalar("Gradient Norm", norm, step)
+    writer.add_scalar("Tokens Per Second", tokens_per_sec, step)
     print(f"step {step+1}, lr: {lr:.5e}, loss: {loss_accum.item():.4f}, norm: {norm:.4f}, time/batch: {d:.2f}s, tokens/sec: {tokens_per_sec:.2f}")
 
+writer.close()
 # Order of optimization tricks implemented:
 # - Use of TF32 on Ampere and later GPUs for faster matrix multiplications
 # - Use of mixed precision training with bfloat16 to reduce memory bandwidth bottleneck
@@ -390,3 +429,4 @@ for step in range(max_steps):
 # - We could have used batch size scheduling (starting with small batch size and increasing it during training) 
 # - Use of fused AdamW optimizer and personalized parameter groups to avoid weight decay on biases and LayerNorm weights
 # - Use of gradient accumulation to simulate larger batch sizes
+# 
