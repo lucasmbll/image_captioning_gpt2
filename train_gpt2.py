@@ -418,15 +418,3 @@ for step in range(max_steps):
     print(f"step {step+1}, lr: {lr:.5e}, loss: {loss_accum.item():.4f}, norm: {norm:.4f}, time/batch: {d:.2f}s, tokens/sec: {tokens_per_sec:.2f}")
 
 writer.close()
-# Order of optimization tricks implemented:
-# - Use of TF32 on Ampere and later GPUs for faster matrix multiplications
-# - Use of mixed precision training with bfloat16 to reduce memory bandwidth bottleneck
-# - Use of torch.compile to fuse kernels and optimize computation graph
-# - Use of optimized vocab size (multiple of 256) to leverage Tensor Cores 
-# - Use of Flash Attention instead of naive attention implementation
-# - Use of lr schedule with linear warmup and cosine decay to stabilize training
-# - Use of gradient norm clipping to avoid exploding gradients
-# - We could have used batch size scheduling (starting with small batch size and increasing it during training) 
-# - Use of fused AdamW optimizer and personalized parameter groups to avoid weight decay on biases and LayerNorm weights
-# - Use of gradient accumulation to simulate larger batch sizes
-# 
