@@ -24,7 +24,7 @@ class VisionEncoder(nn.Module):
 
         self.vision_model = CLIPVisionModel.from_pretrained(config.model_name)
         self.image_processor = CLIPImageProcessor.from_pretrained(config.model_name)
-        
+
         # Get vision hidden size
         self.vision_hidden_size = self.vision_model.config.hidden_size
         

@@ -194,7 +194,6 @@ class GPT(nn.Module):
         return optimizer
 
     def load_pretrained_gpt2(self, checkpoint_path):
-        print(f"Loading pretrained GPT-2 from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         pretrained_state = checkpoint['model']
         decoder = self.load_state_dict(pretrained_state, strict=False)

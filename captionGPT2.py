@@ -38,14 +38,12 @@ class captionGPT2(nn.Module):
             self._freeze_gpt_base()
         
         # Print model info
-        self._print_model_info()
+        #self._print_model_info()
     
     def _freeze_gpt_base(self):
-        """Freeze all GPT parameters except cross-attention"""
         for name, param in self.gpt.named_parameters():
-            if 'cross_attn' not in name and 'ln_cross' not in name:
+            if 'cross_attn' not in name and 'ln_cross' not in name: # keep cross-attention layers trainable
                 param.requires_grad = False
-        print("✓ Base GPT-2 frozen (cross-attention layers trainable)")
     
     def _print_model_info(self):
         """Print model architecture summary"""
@@ -62,7 +60,6 @@ class captionGPT2(nn.Module):
         print(f"  - Embedding: {self.gpt_config.n_embd}")
         print(f"  - Cross-attn every {self.gpt_config.cross_attn_every} layers")
         
-        # Show which layers have cross-attention
         cross_attn_layers = [
             i for i, block in enumerate(self.gpt.transformer.h)
             if hasattr(block, 'cross_attn')
@@ -71,9 +68,7 @@ class captionGPT2(nn.Module):
         print(f"{'='*70}\n")
     
     def forward(self, pixel_values, input_ids, targets=None):
-        """
-        Forward pass for training/inference
-        
+        """        
         Args:
             pixel_values: (B, 3, 224, 224) preprocessed images
             input_ids: (B, T) text token IDs
@@ -83,39 +78,14 @@ class captionGPT2(nn.Module):
             logits: (B, T, vocab_size)
             loss: scalar loss if targets provided, else None
         """
-        # Encode image to visual features
-        image_context = self.vision_encoder(pixel_values)
-        
-        # Forward through GPT-2 with cross-attention
-        logits, loss = self.gpt(input_ids, targets=targets, image_context=image_context)
-        
+        image_context = self.vision_encoder(pixel_values) # Encode image to visual features (B, num_patches, projection_dim)
+        logits, loss = self.gpt(input_ids, targets=targets, image_context=image_context) # Go through the decoder (GPT2) logits: (B, T, vocab_size)
         return logits, loss
     
     def load_pretrained_gpt2(self, checkpoint_path):
-        """Load pretrained GPT-2 weights into decoder"""
-        print(f"\n{'='*70}")
         print("Loading Pretrained GPT-2 Weights")
-        print(f"{'='*70}")
-        incompatible = self.gpt.load_pretrained_gpt2(checkpoint_path)
-        
-        # Analyze what was loaded
-        missing = incompatible.missing_keys
-        unexpected = incompatible.unexpected_keys
-        
-        cross_attn_keys = [k for k in missing if 'cross_attn' in k or 'ln_cross' in k]
-        other_missing = [k for k in missing if k not in cross_attn_keys]
-        
-        print(f"\n✓ Loaded pretrained GPT-2")
-        print(f"  - Cross-attention params (new): {len(cross_attn_keys)}")
-        if other_missing:
-            print(f"  ⚠️  Other missing keys: {len(other_missing)}")
-            for k in other_missing[:3]:
-                print(f"      {k}")
-        if unexpected:
-            print(f"  ⚠️  Unexpected keys: {len(unexpected)}")
-        
-        print(f"{'='*70}\n")
-        return incompatible
+        decoder = self.gpt.load_pretrained_gpt2(checkpoint_path)
+        return decoder
     
     @torch.no_grad()
     def generate(

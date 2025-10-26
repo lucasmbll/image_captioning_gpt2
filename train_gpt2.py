@@ -116,7 +116,9 @@ def load_checkpoint(checkpoint_path, model, optimizer):
     if os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint['model'])
+        state_dict = checkpoint['model']
+        state_dict = {k: v for k, v in state_dict.items() if not k.endswith('.attn.bias')}
+        model.load_state_dict(state_dict)
         optimizer.load_state_dict(checkpoint['optimizer'])
         start_step = checkpoint['step'] + 1  # Resume from next step
         print(f"Resuming from step {start_step}")
