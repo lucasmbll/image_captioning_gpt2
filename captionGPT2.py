@@ -1,0 +1,211 @@
+"""Vision-Language model combining vision encoder with GPT-2 decoder"""
+import torch
+import torch.nn as nn
+from decoder import GPT, GPTConfig
+from encoder import VisionEncoder, VisionEncoderConfig
+
+class captionGPT2(nn.Module):
+    def __init__(
+        self,
+        gpt_config: GPTConfig,
+        vision_config: VisionEncoderConfig=None,
+        freeze_gpt_base: bool = True
+    ):
+        super().__init__()
+        
+        self.gpt_config = gpt_config
+        
+        if vision_config is None:
+            vision_config = VisionEncoderConfig(
+                projection_dim=gpt_config.n_embd,  # Match GPT embedding dimension
+                freeze_encoder=True
+            )
+        else:
+            # Ensure projection_dim matches GPT n_embd
+            assert vision_config.projection_dim == gpt_config.n_embd, \
+                f"Vision projection_dim ({vision_config.projection_dim}) must match GPT n_embd ({gpt_config.n_embd})"
+        
+        self.vision_config = vision_config
+        
+        # 1. Vision Encoder
+        self.vision_encoder = VisionEncoder(vision_config)
+        
+        # 2. GPT-2 Decoder with cross-attention
+        self.gpt = GPT(gpt_config)
+        
+        # Optionally freeze base GPT-2 parameters
+        if freeze_gpt_base:
+            self._freeze_gpt_base()
+        
+        # Print model info
+        self._print_model_info()
+    
+    def _freeze_gpt_base(self):
+        """Freeze all GPT parameters except cross-attention"""
+        for name, param in self.gpt.named_parameters():
+            if 'cross_attn' not in name and 'ln_cross' not in name:
+                param.requires_grad = False
+        print("✓ Base GPT-2 frozen (cross-attention layers trainable)")
+    
+    def _print_model_info(self):
+        """Print model architecture summary"""
+        print(f"\n{'='*70}")
+        print("captionGPT2 Model Summary")
+        print(f"{'='*70}")
+        print(f"Vision Encoder: {self.vision_config.model_name}")
+        print(f"  - Num patches: {self.vision_encoder.get_num_patches()}")
+        print(f"  - Output dim: {self.vision_config.projection_dim}")
+        print(f"  - Frozen: {self.vision_config.freeze_encoder}")
+        print(f"\nGPT-2 Decoder:")
+        print(f"  - Layers: {self.gpt_config.n_layer}")
+        print(f"  - Heads: {self.gpt_config.n_head}")
+        print(f"  - Embedding: {self.gpt_config.n_embd}")
+        print(f"  - Cross-attn every {self.gpt_config.cross_attn_every} layers")
+        
+        # Show which layers have cross-attention
+        cross_attn_layers = [
+            i for i, block in enumerate(self.gpt.transformer.h)
+            if hasattr(block, 'cross_attn')
+        ]
+        print(f"  - Cross-attn layers: {cross_attn_layers}")
+        print(f"{'='*70}\n")
+    
+    def forward(self, pixel_values, input_ids, targets=None):
+        """
+        Forward pass for training/inference
+        
+        Args:
+            pixel_values: (B, 3, 224, 224) preprocessed images
+            input_ids: (B, T) text token IDs
+            targets: (B, T) target token IDs for loss computation
+        
+        Returns:
+            logits: (B, T, vocab_size)
+            loss: scalar loss if targets provided, else None
+        """
+        # Encode image to visual features
+        image_context = self.vision_encoder(pixel_values)
+        
+        # Forward through GPT-2 with cross-attention
+        logits, loss = self.gpt(input_ids, targets=targets, image_context=image_context)
+        
+        return logits, loss
+    
+    def load_pretrained_gpt2(self, checkpoint_path):
+        """Load pretrained GPT-2 weights into decoder"""
+        print(f"\n{'='*70}")
+        print("Loading Pretrained GPT-2 Weights")
+        print(f"{'='*70}")
+        incompatible = self.gpt.load_pretrained_gpt2(checkpoint_path)
+        
+        # Analyze what was loaded
+        missing = incompatible.missing_keys
+        unexpected = incompatible.unexpected_keys
+        
+        cross_attn_keys = [k for k in missing if 'cross_attn' in k or 'ln_cross' in k]
+        other_missing = [k for k in missing if k not in cross_attn_keys]
+        
+        print(f"\n✓ Loaded pretrained GPT-2")
+        print(f"  - Cross-attention params (new): {len(cross_attn_keys)}")
+        if other_missing:
+            print(f"  ⚠️  Other missing keys: {len(other_missing)}")
+            for k in other_missing[:3]:
+                print(f"      {k}")
+        if unexpected:
+            print(f"  ⚠️  Unexpected keys: {len(unexpected)}")
+        
+        print(f"{'='*70}\n")
+        return incompatible
+    
+    @torch.no_grad()
+    def generate(
+        self,
+        pixel_values,
+        tokenizer,
+        max_length=50,
+        temperature=1.0,
+        top_k=50,
+        start_token_id=None,
+        eos_token_id=50256
+    ):
+        """
+        Generate captions for images
+        
+        Args:
+            pixel_values: (B, 3, 224, 224) or (3, 224, 224)
+            tokenizer: tokenizer with encode/decode methods
+            max_length: max caption length
+            temperature: sampling temperature
+            top_k: top-k sampling parameter
+            start_token_id: optional start token
+            eos_token_id: end of sequence token
+        
+        Returns:
+            captions: list of generated caption strings
+        """
+        self.eval()
+        
+        # Handle single image
+        if pixel_values.dim() == 3:
+            pixel_values = pixel_values.unsqueeze(0)
+        
+        device = pixel_values.device
+        batch_size = pixel_values.size(0)
+        
+        # Encode image once
+        image_context = self.vision_encoder(pixel_values)
+        
+        # Initialize sequence
+        if start_token_id is not None:
+            generated = torch.full((batch_size, 1), start_token_id, dtype=torch.long, device=device)
+        else:
+            generated = torch.zeros((batch_size, 0), dtype=torch.long, device=device)
+        
+        # Generate tokens autoregressively
+        for _ in range(max_length):
+            # Get logits from model
+            logits, _ = self.gpt(generated, image_context=image_context)
+            logits = logits[:, -1, :] / temperature
+            
+            # Top-k filtering
+            if top_k > 0:
+                indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+                logits[indices_to_remove] = float('-inf')
+            
+            # Sample next token
+            probs = torch.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            
+            # Append to sequence
+            generated = torch.cat([generated, next_token], dim=1)
+            
+            # Stop if all sequences hit EOS
+            if (next_token == eos_token_id).all():
+                break
+        
+        # Decode to text
+        captions = []
+        for seq in generated:
+            caption = tokenizer.decode(seq.tolist())
+            captions.append(caption)
+        
+        return captions
+    
+    def get_trainable_params(self):
+        """Get summary of trainable parameters"""
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        
+        vision_trainable = sum(p.numel() for p in self.vision_encoder.parameters() if p.requires_grad)
+        gpt_trainable = sum(p.numel() for p in self.gpt.parameters() if p.requires_grad)
+        
+        print(f"\n{'='*60}")
+        print("Trainable Parameters")
+        print(f"{'='*60}")
+        print(f"Vision Encoder:  {vision_trainable:>12,} trainable")
+        print(f"GPT-2 Decoder:   {gpt_trainable:>12,} trainable")
+        print(f"{'─'*60}")
+        print(f"Total:           {trainable:>12,} / {total:>12,} ({trainable/total*100:.1f}%)")
+        print(f"{'='*60}\n")
+        
+        return {'total': total, 'trainable': trainable}

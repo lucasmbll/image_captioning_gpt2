@@ -6,14 +6,13 @@ from torch.nn import functional as F
 import inspect
 
 @dataclass
-class decoderConfig:
+class GPTConfig:
     block_size: int = 1024 #max sequence length
     vocab_size: int = 50304 #50257 #number of tokens: 50000 BPE + 256 Bytes tokens + end of text token
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    use_cross_attention: bool = False       # Enable cross-attention blocks
-    cross_attn_every: int = 1               # Add cross-attn every N layers
+    cross_attn_every: int = 2               # Add cross-attn every N layers
 
 
 ##### Custom modules #####
@@ -119,7 +118,7 @@ class BlockWithCrossAttention(nn.Module):
         return x
     
 
-class Decoder(nn.Module):
+class GPT(nn.Module):
 
     def __init__(self, config):
         super().__init__()
@@ -127,7 +126,7 @@ class Decoder(nn.Module):
 
         blocks = []
         for i in range(config.n_layer):
-            if config.use_cross_attention and (i % config.cross_attn_every == 0):
+            if (i % config.cross_attn_every == 0):
                 blocks.append(BlockWithCrossAttention(config))
             else:
                 blocks.append(Block(config))
@@ -198,11 +197,10 @@ class Decoder(nn.Module):
         print(f"Loading pretrained GPT-2 from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         pretrained_state = checkpoint['model']
+        decoder = self.load_state_dict(pretrained_state, strict=False)
+        return decoder
         
-        # Load with strict=False to allow missing cross-attention parameters
-        incompatible = self.load_state_dict(pretrained_state, strict=False)
-        
-        # Analyze what was loaded vs. newly initialized
+"""        # Analyze what was loaded vs. newly initialized
         missing_keys = incompatible.missing_keys
         unexpected_keys = incompatible.unexpected_keys
         
@@ -211,7 +209,9 @@ class Decoder(nn.Module):
         other_missing = [k for k in missing_keys if k not in cross_attn_keys]
 
         print(f'Missing keys: {len(missing_keys)} total')
+        print(f'Missing keys: {missing_keys}')
         print(f'Unexpected keys: {len(unexpected_keys)} total')
+        print(f'Incompatible keys: {unexpected_keys} total')
         
         print(f"\n✓ Successfully loaded pretrained weights")
         print(f"\nRandomly initialized cross-attention parameters ({len(cross_attn_keys)} keys):")
@@ -257,6 +257,5 @@ class Decoder(nn.Module):
         cross_attn_layers = [i for i, block in enumerate(self.transformer.h) 
                             if isinstance(block, BlockWithCrossAttention)]
         print(f"\nLayers with cross-attention: {cross_attn_layers}")
-        print(f"{'='*70}\n")
+        print(f"{'='*70}\n")"""
         
-        return incompatible
