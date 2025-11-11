@@ -15,7 +15,6 @@ class GPTConfig:
     cross_attn_every: int = 2               # Add cross-attn every N layers
 
 
-##### Custom modules #####
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -101,7 +100,7 @@ class Block(nn.Module):
         return x 
     
 class BlockWithCrossAttention(nn.Module):    
-    def __init__(self, config, has_cross_attention=True):
+    def __init__(self, config):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
@@ -199,62 +198,4 @@ class GPT(nn.Module):
         decoder = self.load_state_dict(pretrained_state, strict=False)
         return decoder
         
-"""        # Analyze what was loaded vs. newly initialized
-        missing_keys = incompatible.missing_keys
-        unexpected_keys = incompatible.unexpected_keys
-        
-        # Separate cross-attention keys from other missing keys
-        cross_attn_keys = [k for k in missing_keys if 'cross_attn' in k or 'ln_cross' in k]
-        other_missing = [k for k in missing_keys if k not in cross_attn_keys]
 
-        print(f'Missing keys: {len(missing_keys)} total')
-        print(f'Missing keys: {missing_keys}')
-        print(f'Unexpected keys: {len(unexpected_keys)} total')
-        print(f'Incompatible keys: {unexpected_keys} total')
-        
-        print(f"\n✓ Successfully loaded pretrained weights")
-        print(f"\nRandomly initialized cross-attention parameters ({len(cross_attn_keys)} keys):")
-        
-        # Group by layer for better readability
-        cross_attn_by_layer = {}
-        for key in cross_attn_keys:
-            layer_num = key.split('.')[2] if 'transformer.h' in key else 'other'
-            if layer_num not in cross_attn_by_layer:
-                cross_attn_by_layer[layer_num] = []
-            cross_attn_by_layer[layer_num].append(key.split('.')[-1])
-        
-        for layer, params in sorted(cross_attn_by_layer.items()):
-            if layer.isdigit():
-                print(f"  Layer {layer}: {', '.join(set(params))}")
-        
-        if other_missing:
-            print(f"\n⚠️  Warning: Other missing keys (unexpected):")
-            for k in other_missing[:5]:
-                print(f"    {k}")
-            if len(other_missing) > 5:
-                print(f"    ... and {len(other_missing) - 5} more")
-        
-        if unexpected_keys:
-            print(f"\n⚠️  Unexpected keys in checkpoint (ignored):")
-            for k in unexpected_keys[:5]:
-                print(f"    {k}")
-            if len(unexpected_keys) > 5:
-                print(f"    ... and {len(unexpected_keys) - 5} more")
-        
-        # Count parameters
-        total_params = sum(p.numel() for p in self.parameters())
-        loaded_params = sum(p.numel() for name, p in self.named_parameters() 
-                           if name not in cross_attn_keys)
-        new_params = total_params - loaded_params
-        
-        print(f"\nParameter Summary:")
-        print(f"  Total parameters:        {total_params:>12,}")
-        print(f"  Loaded from pretrained:  {loaded_params:>12,} ({loaded_params/total_params*100:.1f}%)")
-        print(f"  Newly initialized:       {new_params:>12,} ({new_params/total_params*100:.1f}%)")
-        
-        # Show which layers have cross-attention
-        cross_attn_layers = [i for i, block in enumerate(self.transformer.h) 
-                            if isinstance(block, BlockWithCrossAttention)]
-        print(f"\nLayers with cross-attention: {cross_attn_layers}")
-        print(f"{'='*70}\n")"""
-        

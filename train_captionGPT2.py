@@ -1,4 +1,3 @@
-"""Training script for captionGPT2 on COCO dataset"""
 import os
 import time
 import math
@@ -13,26 +12,22 @@ from decoder import GPTConfig
 from encoder import VisionEncoderConfig
 from vision_dataset import COCOCaptionDataset, collate_fn
 
-# ============================================================================
-# Configuration
-# ============================================================================
 
-# Paths
+# Configuration 
+
 COCO_DATA_DIR = "COCO" 
 CHECKPOINT_DIR = "caption_checkpoints"
 LOG_DIR = "caption_logs"
 GPT2_CHECKPOINT = "gpt2_checkpoints/old_check/model_19073.pt"
 
-# Training hyperparameters
 BATCH_SIZE = 32
 NUM_EPOCHS = 1
-MAX_CAPTION_LENGTH = 77
+MAX_CAPTION_LENGTH = 100
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.01
 WARMUP_STEPS = 500
 NUM_WORKERS = 4
 
-# Model configuration
 GPT_CONFIG = GPTConfig(
     block_size=1024,
     vocab_size=50304,
@@ -53,10 +48,6 @@ VISION_CONFIG = VisionEncoderConfig(
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Using device: {device}")
 
-# ============================================================================
-# Setup
-# ============================================================================
-
 #os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 #os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -66,13 +57,9 @@ if torch.cuda.is_available():
 
 torch.set_float32_matmul_precision('high')
 
-# ============================================================================
-# Model initialization
-# ============================================================================
+# Initialization
 
-print("\n" + "="*70)
 print("Initializing captionGPT2 model")
-print("="*70)
 
 model = captionGPT2(
     gpt_config=GPT_CONFIG,
@@ -89,13 +76,9 @@ else:
 model.to(device)
 model.get_trainable_params()
 
-# ============================================================================
-# Dataset and DataLoader
-# ============================================================================
+# Dataset
 
-print("\n" + "="*70)
 print("Loading COCO datasets")
-print("="*70)
 
 train_dataset = COCOCaptionDataset(
     root_dir=COCO_DATA_DIR,
@@ -132,9 +115,7 @@ val_loader = DataLoader(
 print(f"Train batches: {len(train_loader)}")
 print(f"Val batches: {len(val_loader)}")
 
-# ============================================================================
-# Optimizer and scheduler
-# ============================================================================
+# Optimizer and learning rate scheduler
 
 optimizer = model.gpt.configure_optimizers(
     weight_decay=WEIGHT_DECAY,
@@ -144,8 +125,7 @@ optimizer = model.gpt.configure_optimizers(
 
 total_steps = len(train_loader) * NUM_EPOCHS
 
-def get_lr(step):
-    """Learning rate schedule with warmup and cosine decay"""
+def get_lr(step): #cosine decay with warmup
     if step < WARMUP_STEPS:
         return LEARNING_RATE * (step + 1) / WARMUP_STEPS
     if step > total_steps:
@@ -154,15 +134,12 @@ def get_lr(step):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return LEARNING_RATE * 0.1 + coeff * (LEARNING_RATE * 0.9)
 
-# ============================================================================
-# Training utilities
-# ============================================================================
+# Log
 
 writer = SummaryWriter(log_dir=LOG_DIR)
 tokenizer = tiktoken.get_encoding("gpt2")
 
 def save_checkpoint(step, epoch, val_loss, filename):
-    """Save model checkpoint"""
     checkpoint = {
         'model': model.state_dict(),
         'gpt_config': model.gpt_config,
@@ -174,10 +151,9 @@ def save_checkpoint(step, epoch, val_loss, filename):
     }
     path = os.path.join(CHECKPOINT_DIR, filename)
     torch.save(checkpoint, path)
-    print(f"✓ Checkpoint saved: {path}")
+    print(f"Checkpoint saved: {path}")
 
 def load_checkpoint(filename):
-    """Load checkpoint if exists"""
     path = os.path.join(CHECKPOINT_DIR, filename)
     if os.path.exists(path):
         print(f"Loading checkpoint from {path}")
@@ -188,7 +164,6 @@ def load_checkpoint(filename):
     return 0, 0
 
 def validate(epoch, step):
-    """Run validation"""
     model.eval()
     total_loss = 0
     num_batches = min(50, len(val_loader))  # Validate on subset
@@ -213,13 +188,9 @@ def validate(epoch, step):
     
     return avg_loss
 
-# ============================================================================
 # Training loop
-# ============================================================================
 
-print("\n" + "="*70)
 print("Starting training")
-print("="*70)
 
 # Try to resume from checkpoint
 start_step, start_epoch = load_checkpoint("latest_checkpoint.pt")
@@ -232,21 +203,17 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     for batch_idx, batch in enumerate(train_loader):
         t0 = time.time()
         
-        # Move data to device
         pixel_values = batch['pixel_values'].to(device)
         input_ids = batch['input_ids'].to(device)
         targets = batch['targets'].to(device)
         
-        # Forward pass
         optimizer.zero_grad()
         
         with torch.autocast(device_type=device, dtype=torch.bfloat16):
             logits, loss = model(pixel_values, input_ids, targets)
         
-        # Backward pass
         loss.backward()
         
-        # Gradient clipping
         norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         
         # Update weights
@@ -268,14 +235,12 @@ for epoch in range(start_epoch, NUM_EPOCHS):
                   f"loss={loss.item():.4f}, lr={lr:.6f}, norm={norm:.4f}, "
                   f"time={t1-t0:.2f}s")
         
-        # Validation
-        if global_step % 500 == 0 and global_step > 0:
+        if global_step % 500 == 0 and global_step > 0: # Validate and save
             val_loss = validate(epoch, global_step)
             save_checkpoint(global_step, epoch, val_loss, "latest_checkpoint.pt")
             model.train()
         
-        # Save periodic checkpoint
-        if global_step % 2000 == 0 and global_step > 0:
+        if global_step % 2000 == 0 and global_step > 0: # Validate
             val_loss = validate(epoch, global_step)
             save_checkpoint(global_step, epoch, val_loss, f"checkpoint_step_{global_step}.pt")
             model.train()
@@ -284,12 +249,10 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     
     # End of epoch
     avg_epoch_loss = epoch_loss / len(train_loader)
-    print(f"\n{'='*70}")
     print(f"Epoch {epoch} completed: avg_loss = {avg_epoch_loss:.4f}")
-    print(f"{'='*70}\n")
     
     val_loss = validate(epoch, global_step)
     save_checkpoint(global_step, epoch, val_loss, f"checkpoint_epoch_{epoch}.pt")
 
 writer.close()
-print("\n✓ Training complete!")
+print("Training complete")

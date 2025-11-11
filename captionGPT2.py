@@ -1,4 +1,3 @@
-"""Vision-Language model combining vision encoder with GPT-2 decoder"""
 import torch
 import torch.nn as nn
 from decoder import GPT, GPTConfig
@@ -27,13 +26,10 @@ class captionGPT2(nn.Module):
         
         self.vision_config = vision_config
         
-        # 1. Vision Encoder
         self.vision_encoder = VisionEncoder(vision_config)
         
-        # 2. GPT-2 Decoder with cross-attention
         self.gpt = GPT(gpt_config)
         
-        # Optionally freeze base GPT-2 parameters
         if freeze_gpt_base:
             self._freeze_gpt_base()
         
@@ -68,16 +64,6 @@ class captionGPT2(nn.Module):
         print(f"{'='*70}\n")
     
     def forward(self, pixel_values, input_ids, targets=None):
-        """        
-        Args:
-            pixel_values: (B, 3, 224, 224) preprocessed images
-            input_ids: (B, T) text token IDs
-            targets: (B, T) target token IDs for loss computation
-        
-        Returns:
-            logits: (B, T, vocab_size)
-            loss: scalar loss if targets provided, else None
-        """
         image_context = self.vision_encoder(pixel_values) # Encode image to visual features (B, num_patches, projection_dim)
         logits, loss = self.gpt(input_ids, targets=targets, image_context=image_context) # Go through the decoder (GPT2) logits: (B, T, vocab_size)
         return logits, loss
@@ -98,62 +84,37 @@ class captionGPT2(nn.Module):
         start_token_id=None,
         eos_token_id=50256
     ):
-        """
-        Generate captions for images
-        
-        Args:
-            pixel_values: (B, 3, 224, 224) or (3, 224, 224)
-            tokenizer: tokenizer with encode/decode methods
-            max_length: max caption length
-            temperature: sampling temperature
-            top_k: top-k sampling parameter
-            start_token_id: optional start token
-            eos_token_id: end of sequence token
-        
-        Returns:
-            captions: list of generated caption strings
-        """
         self.eval()
         
-        # Handle single image
         if pixel_values.dim() == 3:
             pixel_values = pixel_values.unsqueeze(0)
         
         device = pixel_values.device
         batch_size = pixel_values.size(0)
         
-        # Encode image once
         image_context = self.vision_encoder(pixel_values)
         
-        # Initialize sequence
         if start_token_id is not None:
             generated = torch.full((batch_size, 1), start_token_id, dtype=torch.long, device=device)
         else:
             generated = torch.zeros((batch_size, 0), dtype=torch.long, device=device)
         
-        # Generate tokens autoregressively
         for _ in range(max_length):
-            # Get logits from model
             logits, _ = self.gpt(generated, image_context=image_context)
             logits = logits[:, -1, :] / temperature
             
-            # Top-k filtering
             if top_k > 0:
                 indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
                 logits[indices_to_remove] = float('-inf')
             
-            # Sample next token
             probs = torch.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
             
-            # Append to sequence
             generated = torch.cat([generated, next_token], dim=1)
             
-            # Stop if all sequences hit EOS
             if (next_token == eos_token_id).all():
                 break
         
-        # Decode to text
         captions = []
         for seq in generated:
             caption = tokenizer.decode(seq.tolist())
@@ -162,7 +123,6 @@ class captionGPT2(nn.Module):
         return captions
     
     def get_trainable_params(self):
-        """Get summary of trainable parameters"""
         total = sum(p.numel() for p in self.parameters())
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         

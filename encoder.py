@@ -6,7 +6,6 @@ from transformers import CLIPVisionModel, CLIPImageProcessor
 
 @dataclass
 class VisionEncoderConfig:
-    """Configuration for vision encoder"""
     model_name: str = "openai/clip-vit-base-patch32"
     projection_dim: int = 768  # Should match GPT n_embd
     freeze_encoder: bool = True
@@ -33,7 +32,7 @@ class VisionEncoder(nn.Module):
             for param in self.vision_model.parameters():
                 param.requires_grad = False
             self.vision_model.eval()
-            print(f"✓ Vision encoder frozen")
+            print(f"Vision encoder frozen")
         
         # Projection layer to match GPT-2 embedding dimension
         self.projection = nn.Sequential(
@@ -69,31 +68,18 @@ class VisionEncoder(nn.Module):
         return image_features
     
     def preprocess_images(self, images):
-        """
-        Preprocess PIL images or tensors for the vision model
-        
-        Args:
-            images: list of PIL Images or tensor (B, 3, H, W)
-        
-        Returns:
-            pixel_values: (B, 3, 224, 224) preprocessed tensor
-        """
         if isinstance(images, torch.Tensor):
             return images #(B, 3, H, W)
 
-        # Use image processor
+        # in this case images is a list of PIL Images
         processed = self.image_processor(images=images, return_tensors="pt")
-        return processed['pixel_values']
+        return processed['pixel_values'] #(B, 3, H, W)
     
     def get_num_patches(self):
-        """Get number of visual tokens (patches) produced by encoder"""
-        # For CLIP ViT: depends on patch size and image resolution
         # CLIP ViT-B/32: 224x224 image, 32x32 patches = 7x7 = 49 patches + 1 CLS = 50 tokens
-        if 'clip' in self.model_name.lower():
-            config = self.vision_model.config
-            image_size = config.image_size
-            patch_size = config.patch_size
-            num_patches = (image_size // patch_size) ** 2 + 1  # +1 for CLS token
-            return num_patches
-        return None
+        config = self.vision_model.config
+        image_size = config.image_size
+        patch_size = config.patch_size
+        num_patches = (image_size // patch_size) ** 2 + 1  # +1 for CLS token
+        return num_patches
 

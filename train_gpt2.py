@@ -6,7 +6,7 @@ import numpy as np
 from hellaswag import render_example, iterate_examples
 from torch.utils.tensorboard import SummaryWriter
 
-from gpt2_model import GPT, GPTConfig
+from decoder import GPT, GPTConfig
 
 ##### Dataloader #####
 import tiktoken
@@ -89,7 +89,7 @@ val_loader = DataLoaderLite(B, T, split='val')
 
 torch.set_float32_matmul_precision('high')  #for using TF32 on Ampere GPUs 
 
-model = GPT(GPTConfig(vocab_size=50304)) 
+model = GPT(GPTConfig(vocab_size=50304, cross_attn_every=None))
 model.to(device) 
 use_compile = False 
 if use_compile:

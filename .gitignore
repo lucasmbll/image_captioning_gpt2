@@ -13,3 +13,5 @@ gpt2_training_logs
 __pycache__/captionGPT2.cpython-39.pyc
 __pycache__/encoder.cpython-39.pyc
 __pycache__/vision_dataset.cpython-39.pyc
+old_code/
+dev.ipynb
