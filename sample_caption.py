@@ -48,7 +48,7 @@ transform = transforms.Compose([
 ])
 
 # Load and preprocess the image
-image_path = "pomeranian.jpg"  
+image_path = "cyclistes.png"  
 image = Image.open(image_path).convert("RGB")
 pixel_values = transform(image).unsqueeze(0).to(DEVICE)  # Add batch dimension
 

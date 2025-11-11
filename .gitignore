@@ -15,3 +15,6 @@ __pycache__/encoder.cpython-39.pyc
 __pycache__/vision_dataset.cpython-39.pyc
 old_code/
 dev.ipynb
+results/caption/train.csv
+.gitignore
+results/caption/val.csv
