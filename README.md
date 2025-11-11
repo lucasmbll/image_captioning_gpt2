@@ -23,12 +23,6 @@ The GPT-2 model was pretrained on the **FineWeb-Edu 10BT** dataset, consisting o
 - **Learning Rate**: 6e-4 with 715-step warmup and cosine decay.
 - **Precision**: Mixed precision (bfloat16) for faster training.
 - **Validation**: Evaluated on the **HellaSwag** benchmark for natural language understanding.
-
-#### Results:
-- **Training Loss**: Converged steadily over the pretraining steps.
-- **Validation Loss**: Demonstrated consistent improvement.
-- **HellaSwag Accuracy**: Achieved competitive accuracy, validating the model's language understanding capabilities.
-
 ---
 
 ### Fine-Tuning for Image Captioning
@@ -57,16 +51,13 @@ The pretrained GPT-2 model was fine-tuned on the **COCO 2017** dataset for image
 #### Loss and Accuracy Plots
 <div style="display: flex; justify-content: center; align-items: center; gap: 20px;">
     <figure style="text-align: center;">
-        <img src="results/gpt2/train_loss.png" alt="Training Loss" width="300">
-        <figcaption>Training Loss</figcaption>
+        <img src="results/gpt2/train_loss.png" alt="Training Loss" width="100">
     </figure>
     <figure style="text-align: center;">
-        <img src="results/gpt2/val_loss.png" alt="Validation Loss" width="300">
-        <figcaption>Validation Loss</figcaption>
+        <img src="results/gpt2/val_loss.png" alt="Validation Loss" width="100">
     </figure>
         <figure style="text-align: center;">
-        <img src="results/gpt2/hellaswag_acc.png" alt="HellaSwag Accuracy" width="300">
-        <figcaption>HellaSwag Accuracy</figcaption>
+        <img src="results/gpt2/hellaswag_acc.png" alt="HellaSwag Accuracy" width="100">
     </figure>
 </div>
 
@@ -81,12 +72,10 @@ The pretrained GPT-2 model was fine-tuned on the **COCO 2017** dataset for image
 #### Loss Plots
 <div style="display: flex; justify-content: center; align-items: center; gap: 20px;">
     <figure style="text-align: center;">
-        <img src="results/caption/train_loss.png" alt="Training Loss (Fine-tuning)" width="300">
-        <figcaption>Training Loss (Fine-tuning)</figcaption>
+        <img src="results/caption/train_loss.png" alt="Training Loss (Fine-tuning)" width="100">
     </figure>
     <figure style="text-align: center;">
-        <img src="results/caption/val_loss.png" alt="Validation Loss (Fine-tuning)" width="300">
-        <figcaption>Validation Loss (Fine-tuning)</figcaption>
+        <img src="results/caption/val_loss.png" alt="Validation Loss (Fine-tuning)" width="100">     
     </figure>
 </div>
 
