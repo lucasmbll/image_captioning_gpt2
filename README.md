@@ -12,10 +12,11 @@ A vision-language pipeline combining a frozen CLIP vision encoder with a GPT-2 d
 - Text Decoder: GPT-2 (12 layers, 12 heads, 768-d), with cross-attention blocks inserted every N layers.
 - Fusion: Gated cross-attention integrates image features into decoding.
 
-<figure style="text-align: center;">
-  <img src="images/XATTN.png" style="width:35%; " />
-  <figcaption><small>Encoder-Decoder with Gated Cross Attention.</small></figcaption>
-</figure>
+<p align="center">
+  <img src="images/XATTN.png" width="320" alt="Encoder-Decoder with Gated Cross Attention"/>
+</p>
+<p align="center"><small><em>Encoder-Decoder with Gated Cross Attention.</em></small></p>
+
 
 ---
 
@@ -56,19 +57,17 @@ The pretrained GPT-2 model was fine-tuned on the **COCO 2017** dataset for image
 ### GPT-2 Pretraining
 
 #### Loss and Accuracy Plots
-<figure style="text-align: center;">
-  <img src="images/pretraining.png" style="width:90%; " />
-  <figcaption><small>Pretraining metrics.</small></figcaption>
-</figure>
+<p align="center">
+  <img src="images/pretraining.png" width="900" alt="Pretraining metrics" />
+</p>
+<p align="center"><small><em>Pretraining metrics.</em></small></p>
 
-<div style="display: flex; justify-content: center; align-items: center; gap: 20px;">
 
-</div>
+<p align="center">
+  <img src="images/generation.png" width="900" alt="Generated samples from pretrained GPT-2" />
+</p>
+<p align="center"><small><em>Generated samples from pretrained GPT-2.</em></small></p>
 
-<figure style="text-align: center;">
-  <img src="images/generation.png" style="width:90%; " />
-  <figcaption><small>Generated samples from pretrained GPT-2.</small></figcaption>
-</figure>
 
 ---
 ### Fine-Tuning for Image Captioning
@@ -76,22 +75,23 @@ The pretrained GPT-2 model was fine-tuned on the **COCO 2017** dataset for image
 #### Evaluation Metrics
 
 
-<div style="display:flex; gap:12px; align-items:flex-start;">
-  <figure style="text-align: center;">
-    <img src="images/CIDER_val.png" alt="A" style="width:350px; height:auto;" />
-    <figcaption style="text-align:center;"><small>Validation CIDEr</small></figcaption>
-  </figure>
-  <figure style="text-align: center;">
-    <img src="images/Val_ppl.png" alt="B" style="width:350px; height:auto;" />
-    <figcaption style="text-align:center;"><small>Validation perplexity</small></figcaption>
-  </figure>
-</div>
+<table align="center">
+  <tr>
+    <td align="center">
+      <img src="images/CIDER_val.png" width="350" alt="Validation CIDEr"/><br/>
+      <small><em>Validation CIDEr</em></small>
+    </td>
+    <td align="center">
+      <img src="images/Val_ppl.png" width="350" alt="Validation perplexity"/><br/>
+      <small><em>Validation perplexity</em></small>
+    </td>
+  </tr>
+</table>
 
 *Models 1, 2 and 4 correspond to decoders with gated cross-attention every 1, 2 and 4 layers, respectively.*
 
 
-<!-- Insert results summary table below the CIDEr / PPL curves -->
-<div style="display:flex; justify-content:center; margin-top:12px;">
+<div align="center">
 <table>
   <thead>
     <tr>
@@ -124,20 +124,23 @@ The pretrained GPT-2 model was fine-tuned on the **COCO 2017** dataset for image
 </table>
 </div>
 
+
 *Evaluation results after 8 epochs of training.*
 
 #### Analysis of the gates
 
-<div style="display:flex; gap:12px; align-items:flex-start;">
-  <figure style="text-align: center;">
-    <img src="images/attn_gates.png" alt="A" style="width:350px; height:auto;" />
-    <figcaption style="text-align:center;"><small>XATTN gates through training</small></figcaption>
-  </figure>
-  <figure style="text-align: center;">
-    <img src="images/FFN_gates.png" alt="B" style="width:350px; height:auto;" />
-    <figcaption style="text-align:center;"><small>FFN gates through training</small></figcaption>
-  </figure>
-</div>
+<table align="center">
+  <tr>
+    <td align="center">
+      <img src="images/attn_gates.png" width="350" alt="XATTN gates through training"/><br/>
+      <small><em>XATTN gates through training</em></small>
+    </td>
+    <td align="center">
+      <img src="images/FFN_gates.png" width="350" alt="FFN gates through training"/><br/>
+      <small><em>FFN gates through training</em></small>
+    </td>
+  </tr>
+</table>
 
 *We observe the same behaviour as in the Flamingo paper: deeper layers have larger gate values.*
 
@@ -158,17 +161,18 @@ I explored additional multimodal fusion paradigms, following inspirations such a
 - Early fusion — linear prefix: project ViT tokens to decoder embeddings and prepend as a prefix. Extremely lightweight (~0.6M params) but low capacity; in experiments it quickly saturated (CIDEr ≈ 12).
 - Early fusion — Q‑Former (BLIP‑2 inspired): learn a small set of queries that attend to ViT features and produce prefix tokens. More expressive than the linear prefix; current results: CIDEr 35.0, PPL 12.8.
 
-
-<div style="display:flex; gap:12px; align-items:flex-start;">
-  <figure style="text-align: center;">
-    <img src="images/linearprefix.png" alt="A" style="width:350px; height:auto;" />
-    <figcaption style="text-align:center;"><small>Linear Projection for decoder Prefix</small></figcaption>
-  </figure>
-  <figure style="text-align: center;">
-    <img src="images/qformerprefix.png" alt="B" style="width:395px; height:auto;" />
-    <figcaption style="text-align:center;"><small>Q-Former approach</small></figcaption>
-  </figure>
-</div>
+<table align="center">
+  <tr>
+    <td align="center">
+      <img src="images/linearprefix.png" width="350" alt="Linear Projection for decoder Prefix"/><br/>
+      <small><em>Linear Projection for decoder prefix</em></small>
+    </td>
+    <td align="center">
+      <img src="images/qformerprefix.png" width="395" alt="Q-Former approach"/><br/>
+      <small><em>Q‑Former approach</em></small>
+    </td>
+  </tr>
+</table>
 
 ## Bibliography
 
