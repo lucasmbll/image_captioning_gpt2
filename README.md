@@ -1,19 +1,25 @@
-# Image Captioning with GPT-2
+# Pretraining and Multimodal Fine-Tuning of a LLM
+## Image Captioning with GPT-2
 
-A vision-language model that combines a frozen CLIP vision encoder with a GPT-2 decoder enhanced with cross-attention layers to generate image captions.
+Independent project conducted alongside my Master 2 in AI at PSL Research University.  
+A vision-language pipeline combining a frozen CLIP vision encoder with a GPT-2 decoder augmented by cross-attention, fine-tuned to generate image captions on COCO.
 
 ---
 
 ## Architecture
 
-- **Vision Encoder**: Frozen CLIP ViT-B/32 extracts visual features and projects them to 768-dimensional embeddings.
-- **Text Decoder**: GPT-2 (12 layers, 768-dim, 12 heads) with cross-attention layers inserted every 2 blocks to integrate visual context.
-- **Fusion**: Cross-attention allows the text decoder to attend to image features during caption generation.
+- Vision Encoder: CLIP ViT-B/32 (frozen), features projected to 768-d.
+- Text Decoder: GPT-2 (12 layers, 12 heads, 768-d), with cross-attention blocks inserted every N layers.
+- Fusion: Gated cross-attention integrates image features into decoding.
+
+<figure style="text-align: center;">
+  <img src="images/XATTN.png" style="width:35%; " />
+  <figcaption><small>Encoder-Decoder with Gated Cross Attention.</small></figcaption>
+</figure>
 
 ---
 
 ## Training Strategy
-
 ### GPT-2 Pretraining
 The GPT-2 model was pretrained on the **FineWeb-Edu 10BT** dataset, consisting of 10 billion tokens of high-quality educational web text. The pretraining process followed the methodology outlined in Andrej Karpathy's **"From Zero to Hero"** video series, which demonstrates how to train a GPT-like model from scratch.
 
@@ -23,17 +29,18 @@ The GPT-2 model was pretrained on the **FineWeb-Edu 10BT** dataset, consisting o
 - **Learning Rate**: 6e-4 with 715-step warmup and cosine decay.
 - **Precision**: Mixed precision (bfloat16) for faster training.
 - **Validation**: Evaluated on the **HellaSwag** benchmark for natural language understanding.
+
 ---
 
 ### Fine-Tuning for Image Captioning
-The pretrained GPT-2 model was fine-tuned on the **COCO 2017** dataset for image captioning. The vision encoder (CLIP) was frozen, and only the cross-attention and projection layers were trained.
+The pretrained GPT-2 model was fine-tuned on the **COCO 2017** dataset for image captioning. The vision encoder was frozen, and only the cross-attention and projection layers were trained.
 
 #### Key Details:
 - **Dataset**: COCO 2017 (118K training images, 5K validation images).
-- **Batch Size**: 32 images.
-- **Learning Rate**: 1e-4 with 500-step warmup and cosine decay.
+- **Learning Rate**: Cosine schedule with lr 2e-4 → 1e-4.
 - **Precision**: Mixed precision (bfloat16) for faster training.
-- **Optimization**: Gradient accumulation to simulate larger batch sizes.
+- **Evaluation**: Perplexity and CIDEr on validation subset with deterministic sampling
+
 
 ---
 
@@ -49,44 +56,131 @@ The pretrained GPT-2 model was fine-tuned on the **COCO 2017** dataset for image
 ### GPT-2 Pretraining
 
 #### Loss and Accuracy Plots
-<div style="display: flex; justify-content: center; align-items: center; gap: 20px;">
-    <figure style="text-align: center;">
-        <img src="results/gpt2/train_loss.png" alt="Training Loss" width="200">
-    </figure>
-    <figure style="text-align: center;">
-        <img src="results/gpt2/val_loss.png" alt="Validation Loss" width="200">
-    </figure>
-        <figure style="text-align: center;">
-        <img src="results/gpt2/hellaswag_acc.png" alt="HellaSwag Accuracy" width="200">
-    </figure>
-</div>
+<figure style="text-align: center;">
+  <img src="images/pretraining.png" style="width:90%; " />
+  <figcaption><small>Pretraining metrics.</small></figcaption>
+</figure>
 
 <div style="display: flex; justify-content: center; align-items: center; gap: 20px;">
 
 </div>
+
+<figure style="text-align: center;">
+  <img src="images/generation.png" style="width:90%; " />
+  <figcaption><small>Generated samples from pretrained GPT-2.</small></figcaption>
+</figure>
 
 ---
-
 ### Fine-Tuning for Image Captioning
 
-#### Loss Plots
-<div style="display: flex; justify-content: center; align-items: center; gap: 20px;">
-    <figure style="text-align: center;">
-        <img src="results/caption/train_loss.png" alt="Training Loss (Fine-tuning)" width="200">
-    </figure>
-    <figure style="text-align: center;">
-        <img src="results/caption/val_loss.png" alt="Validation Loss (Fine-tuning)" width="200">     
-    </figure>
+#### Evaluation Metrics
+
+
+<div style="display:flex; gap:12px; align-items:flex-start;">
+  <figure style="text-align: center;">
+    <img src="images/CIDER_val.png" alt="A" style="width:350px; height:auto;" />
+    <figcaption style="text-align:center;"><small>Validation CIDEr</small></figcaption>
+  </figure>
+  <figure style="text-align: center;">
+    <img src="images/Val_ppl.png" alt="B" style="width:350px; height:auto;" />
+    <figcaption style="text-align:center;"><small>Validation perplexity</small></figcaption>
+  </figure>
 </div>
+
+*Models 1, 2 and 4 correspond to decoders with gated cross-attention every 1, 2 and 4 layers, respectively.*
+
+
+<!-- Insert results summary table below the CIDEr / PPL curves -->
+<div style="display:flex; justify-content:center; margin-top:12px;">
+<table>
+  <thead>
+    <tr>
+      <th style="padding:6px 12px; text-align:left;">Model</th>
+      <th style="padding:6px 12px; text-align:left;">Trainable</th>
+      <th style="padding:6px 12px; text-align:right;">CIDEr ↑</th>
+      <th style="padding:6px 12px; text-align:right;">PPL ↓</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding:6px 12px;">XATTN Every layer</td>
+      <td style="padding:6px 12px;">85M (28%)</td>
+      <td style="padding:6px 12px; text-align:right;"><strong>57.1</strong></td>
+      <td style="padding:6px 12px; text-align:right;"><strong>7.43</strong></td>
+    </tr>
+    <tr>
+      <td style="padding:6px 12px;">XATTN Every 2 layers</td>
+      <td style="padding:6px 12px;">43M (17%)</td>
+      <td style="padding:6px 12px; text-align:right;">55.9</td>
+      <td style="padding:6px 12px; text-align:right;">7.98</td>
+    </tr>
+    <tr>
+      <td style="padding:6px 12px;">XATTN Every 4 layers</td>
+      <td style="padding:6px 12px;">21M (9%)</td>
+      <td style="padding:6px 12px; text-align:right;">47.8</td>
+      <td style="padding:6px 12px; text-align:right;">8.47</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+*Evaluation results after 8 epochs of training.*
+
+#### Analysis of the gates
+
+<div style="display:flex; gap:12px; align-items:flex-start;">
+  <figure style="text-align: center;">
+    <img src="images/attn_gates.png" alt="A" style="width:350px; height:auto;" />
+    <figcaption style="text-align:center;"><small>XATTN gates through training</small></figcaption>
+  </figure>
+  <figure style="text-align: center;">
+    <img src="images/FFN_gates.png" alt="B" style="width:350px; height:auto;" />
+    <figcaption style="text-align:center;"><small>FFN gates through training</small></figcaption>
+  </figure>
+</div>
+
+*We observe the same behaviour as in the Flamingo paper: deeper layers have larger gate values.*
 
 ---
 
 ### Sample Captions
 
-| Image | Generated Caption |
+| Image | Generated Caption (Temp = 1.0, Topk@10) |
 |-------|--------------------|
-| ![Image 1](pomeranian.jpg) | "A small dog is standing in the grass." |
-| ![Image 2](cyclistes.png)    | "A group of people riding bikes down a road." |
+| ![Image 1](images/pomeranian.jpg) | "A small dog is standing in the grass." |
+| ![Image 2](images/cyclistes.png)    | "A group of people riding bikes down a road." |
+| ![Image 3](images/formule1.jpeg)    | "A large group of cars lined up next to each other." |
+
+## Other Approach
+
+I explored additional multimodal fusion paradigms, following inspirations such as BLIP‑2 and Pixtral:
+
+- Early fusion — linear prefix: project ViT tokens to decoder embeddings and prepend as a prefix. Extremely lightweight (~0.6M params) but low capacity; in experiments it quickly saturated (CIDEr ≈ 12).
+- Early fusion — Q‑Former (BLIP‑2 inspired): learn a small set of queries that attend to ViT features and produce prefix tokens. More expressive than the linear prefix; current results: CIDEr 35.0, PPL 12.8.
+
+
+<div style="display:flex; gap:12px; align-items:flex-start;">
+  <figure style="text-align: center;">
+    <img src="images/linearprefix.png" alt="A" style="width:350px; height:auto;" />
+    <figcaption style="text-align:center;"><small>Linear Projection for decoder Prefix</small></figcaption>
+  </figure>
+  <figure style="text-align: center;">
+    <img src="images/qformerprefix.png" alt="B" style="width:395px; height:auto;" />
+    <figcaption style="text-align:center;"><small>Q-Former approach</small></figcaption>
+  </figure>
+</div>
+
+## Bibliography
+
+- Brown, T. B., et al. (2020). Language Models are Few‑Shot Learners. [arXiv:2005.14165](https://arxiv.org/abs/2005.14165)  
+- Dao, T., et al. (2022). FlashAttention: Fast and Memory‑Efficient Exact Attention. [arXiv:2205.14135](https://arxiv.org/abs/2205.14135) — FlashAttention  
+- Zellers, R., et al. (2019). HellaSwag: Can a Machine Really Finish Your Sentence? [arXiv:1905.07830](https://arxiv.org/abs/1905.07830)  
+- Radford, A., et al. (2021). Learning Transferable Visual Models From Natural Language Supervision (CLIP). [arXiv:2103.00020](https://arxiv.org/abs/2103.00020)  
+- Alayrac, J.-B., et al. (2022). Flamingo: a Visual Language Model for Few‑Shot Learning. [arXiv:2204.14198](https://arxiv.org/abs/2204.14198) — Flamingo  
+- Vedantam, R., Zitnick, C. L., & Parikh, D. (2015). CIDEr: Consensus‑based Image Description Evaluation. [arXiv:1411.5726](https://arxiv.org/abs/1411.5726)  
+- Li, J., et al. (2023). BLIP‑2: Bootstrapping Language‑Image Pre‑training with Frozen Image Encoders and Large Language Models. [arXiv:2301.12597](https://arxiv.org/abs/2301.12597) — BLIP‑2 / Q‑Former  
+- Agrawal, P., et al. (2024). Pixtral 12B. [arXiv:2410.07073](https://arxiv.org/abs/2410.07073) — Pixtral
+
 
 ---
 

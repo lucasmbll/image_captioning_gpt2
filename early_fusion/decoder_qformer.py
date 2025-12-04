@@ -1,4 +1,4 @@
-"""GPT-2 model architecture"""
+"""GPT-2 model architecture compatible with qformer"""
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
@@ -12,7 +12,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
-    cross_attn_every: int = 2               # Add cross-attn every N layers
+    use_q_former_prefix: bool = False               # Use Q-Former for image feature extraction
 
 
 class CausalSelfAttention(nn.Module):
@@ -40,36 +40,6 @@ class CausalSelfAttention(nn.Module):
         y = self.c_proj(y)
         return y 
 
-class CrossAttention(nn.Module):
-    
-    def __init__(self, config):
-        super().__init__()
-        assert config.n_embd % config.n_head == 0
-        self.q_proj = nn.Linear(config.n_embd, config.n_embd) # query from text
-        self.kv_proj = nn.Linear(config.n_embd, 2 * config.n_embd) # key and value from image
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd)  # output projection
-        self.c_proj.NANOGPT_SCALE_INIT = 1
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-    
-    def forward(self, x, context):
-        B, T, C = x.size() # x is text input
-        _, T_c, _ = context.size() # context is image input, T_c is number of image tokens
-        
-        q = self.q_proj(x)  # queries from text (B, T, n_embd)
-        kv = self.kv_proj(context)  # keys and values from image context (B, T_c, 2*n_embd)
-        k, v = kv.split(self.n_embd, dim=2)  # Each (B, T_c, n_embd)
-        head_dim = C // self.n_head
-        q = q.view(B, T, self.n_head, head_dim).transpose(1, 2)  # (B, n_head, T, head_dim)
-        k = k.view(B, T_c, self.n_head, head_dim).transpose(1, 2)  # (B, n_head, T_c, head_dim)
-        v = v.view(B, T_c, self.n_head, head_dim).transpose(1, 2)  # (B, n_head, T_c, head_dim)
-
-        # Cross-attention (no causal mask needed - can attend to all image tokens)
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=False) # (B, n_head, T, head_dim)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
-        y = self.c_proj(y)
-        
-        return y
 
 class MLP(nn.Module):
 
@@ -99,53 +69,19 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x 
     
-class BlockWithCrossAttention(nn.Module):    
-    def __init__(self, config):
-        super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = CausalSelfAttention(config)
-
-        self.ln_cross = nn.LayerNorm(config.n_embd)
-        self.cross_attn = CrossAttention(config)
-        self.cross_attn_gate = nn.Parameter(torch.tensor([0.0]))
-
-        self.ln_dense = nn.LayerNorm(config.n_embd)
-        self.ffn = MLP(config)
-        self.dense_gate = nn.Parameter(torch.tensor([0.0])) 
-
-        self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.mlp = MLP(config)
     
-    def forward(self, x, context=None):
-        if context is not None:
-            x = x + torch.tanh(self.cross_attn_gate) * self.cross_attn(self.ln_cross(x), context) # Gated Cross-Attention
-            x = x + torch.tanh(self.dense_gate) * self.ffn(self.ln_dense(x)) # Gated Dense
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
-        return x
-    
-
 class GPT(nn.Module):
 
     def __init__(self, config):
         super().__init__()
         self.config = config
-
-        blocks = []
-        for i in range(config.n_layer):
-            if (i % config.cross_attn_every == 0):
-                blocks.append(BlockWithCrossAttention(config))
-            else:
-                blocks.append(Block(config))
-
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
-            h = nn.ModuleList(blocks),
+            wpe = nn.Embedding(config.block_size, config.n_embd), 
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = nn.LayerNorm(config.n_embd),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-
         self.transformer.wte.weight = self.lm_head.weight
         self.apply(self._init_weights)
     
@@ -159,24 +95,28 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)  
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    def forward(self, idx, targets=None, image_context=None):
+            
+    def forward(self, idx, targets=None, prefix_emb=None):
         B, T = idx.size()
-        assert T <= self.config.block_size, f"Sequence is too long, block size is {self.config.block_size}"
-        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
-        pos_emb = self.transformer.wpe(pos)
-        tok_emb = self.transformer.wte(idx)
-        x = tok_emb + pos_emb
-        
+        if prefix_emb is not None:
+            P = prefix_emb.size(1)
+            assert P + T <= self.config.block_size, "Prefix+tokens exceed block size"
+            pos = torch.arange(0, T, device=idx.device)
+            pos_emb = self.transformer.wpe(pos)  # (P+T, C)
+            tok_emb = self.transformer.wte(idx)  # (B,T,C)
+            tok_emb += pos_emb.unsqueeze(0)
+            x = torch.cat([prefix_emb, tok_emb], dim=1) #+ pos_emb.unsqueeze(0)
+        else:
+            pos = torch.arange(0, T, device=idx.device)
+            pos_emb = self.transformer.wpe(pos)
+            tok_emb = self.transformer.wte(idx)
+            x = tok_emb + pos_emb
         for block in self.transformer.h:
-            if isinstance(block, BlockWithCrossAttention):
-                x = block(x, context=image_context)
-            else:
-                x = block(x)
-                
+            x = block(x)
         x = self.transformer.ln_f(x)
-        logits = self.lm_head(x)
-        loss=None
+        # Only compute logits for textual part (last T positions)
+        logits = self.lm_head(x[:, -T:])
+        loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return logits, loss

@@ -7,7 +7,7 @@ from PIL import Image
 import tiktoken
 
 # Paths
-CHECKPOINT_PATH = "caption_checkpoints/latest_checkpoint.pt"  # Path to your trained checkpoint
+CHECKPOINT_PATH = "caption_checkpoints/run_crossattn/e5_lr2e-4-1e-4_12crossattn_densegate/best_model.pt"  # Path to your trained checkpoint
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Model configuration
@@ -17,7 +17,7 @@ GPT_CONFIG = GPTConfig(
     n_layer=12,
     n_head=12,
     n_embd=768,
-    cross_attn_every=2
+    cross_attn_every=1
 )
 
 VISION_CONFIG = VisionEncoderConfig(
@@ -35,6 +35,7 @@ model = captionGPT2(
 )
 
 # Load checkpoint
+model = torch.compile(model)  # compile first
 checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
 model.load_state_dict(checkpoint['model'])
 model.to(DEVICE)
@@ -48,7 +49,7 @@ transform = transforms.Compose([
 ])
 
 # Load and preprocess the image
-image_path = "cyclistes.png"  
+image_path = "images/formule1.jpeg"  
 image = Image.open(image_path).convert("RGB")
 pixel_values = transform(image).unsqueeze(0).to(DEVICE)  # Add batch dimension
 
@@ -60,11 +61,13 @@ captions = model.generate(
     pixel_values=pixel_values,
     tokenizer=tokenizer,
     max_length=75,  # Maximum caption length
-    temperature=0.1,
-    top_k=10,
+    temperature=1.0,
+    top_k=20,
     start_token_id=tokenizer._special_tokens['<|endoftext|>'],
     eos_token_id=tokenizer._special_tokens['<|endoftext|>']
 )
+
+captions = [caption.replace('<|endoftext|>', '').strip() for caption in captions]
 
 # Print generated captions
 for i, caption in enumerate(captions):

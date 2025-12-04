@@ -8,8 +8,8 @@ from old_code.gpt2_model import GPT, GPTConfig
 CHECKPOINT_PATH = "gpt2_checkpoints/model_19073.pt"
 NUM_SAMPLES = 4
 MAX_LENGTH = 100
-TEMPERATURE = 2.0
-TOP_K = 50
+TEMPERATURE = 1.0
+TOP_K = 10
 SEED = 42
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -34,29 +34,46 @@ def generate_samples(model, prompt, num_samples=4, max_length=100, temperature=1
     
     sample_rng = torch.Generator(device=device)
     sample_rng.manual_seed(seed)
-    
+
+    # EOT token id (allow special)
+    eot_token = enc.encode('<|endoftext|>', allowed_special={'<|endoftext|>'})[0]
+    finished = torch.zeros(num_samples, dtype=torch.bool, device=device)
+
     print(f"Prompt: {prompt}")
     
     # Generate tokens
-    while xgen.size(1) < max_length:
+    while xgen.size(1) < max_length and not torch.all(finished):
         with torch.no_grad():
             with torch.autocast(device_type=device, dtype=torch.bfloat16):
                 logits, _ = model(xgen)
-            
-            logits = logits[:, -1, :] / temperature
-            
+
+            # last-token logits
+            logits = logits[:, -1, :] / max(1e-6, temperature)
+
+            # mask out EOT for unfinished sampling? (optional)
+            # If you want to allow natural early stop, don't penalize EOT here.
+
             probs = F.softmax(logits, dim=-1)
-            topk_probs, topk_indices = torch.topk(probs, top_k, dim=-1)
-            
+            topk_probs, topk_indices = torch.topk(probs, k=top_k, dim=-1)
+
             ix = torch.multinomial(topk_probs, 1, generator=sample_rng)
-            xcol = torch.gather(topk_indices, -1, ix)
-            
+            xcol = torch.gather(topk_indices, -1, ix)  # shape [B, 1]
+
+            # For sequences already finished, force EOT token to keep length consistent
+            xcol[finished] = eot_token
+
+            # Append next token
             xgen = torch.cat((xgen, xcol), dim=1)
+
+            # Update finished mask (newly finished if just emitted EOT)
+            newly_finished = (xcol.squeeze(1) == eot_token)
+            finished = finished | newly_finished
     
+    # Decode (strip any trailing EOT)
     for i in range(num_samples):
         tokens_list = xgen[i].tolist()
-        decoded = enc.decode(tokens_list)
-        print(f"Sample {i+1}:")
+        decoded = enc.decode(tokens_list).replace('<|endoftext|>', '').strip()
+        print(f"\n Sample {i+1}:\n")
         print(decoded)
 
 def interactive_mode(model):
@@ -78,7 +95,7 @@ def interactive_mode(model):
     
     try:
         while True:
-            prompt = input("Enter your prompt: ").strip()
+            prompt = input("Enter your prompt: \n").strip()
             
             if not prompt:
                 print("Empty prompt, please enter some text.\n")

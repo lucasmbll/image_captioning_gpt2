@@ -7,10 +7,11 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import tiktoken
 
-from captionGPT2 import captionGPT2
-from decoder import GPTConfig
-from encoder import VisionEncoderConfig
+from early_fusion.captionGPT2Linear import CaptionGPT2LinearPrefix
+from early_fusion.decoder_qformer import GPTConfig
+from early_fusion.encoder_qformer import VisionEncoderConfig
 from data.vision_dataset import COCOCaptionDataset, collate_fn
+
 from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.bleu.bleu import Bleu
 
@@ -18,19 +19,18 @@ from pycocoevalcap.bleu.bleu import Bleu
 # Configuration 
 
 COCO_DATA_DIR = "COCO" 
-FEATURE_DIR = "COCO/features_clip_vit_b32" # precomputed CLIP features for faster training
-CHECKPOINT_DIR = "caption_checkpoints/run_crossattn/every2"
-LOG_DIR = "caption_logs/run_crossattn/every2"
+CHECKPOINT_DIR = "caption_checkpoints/run_linear"
+LOG_DIR = "caption_logs/run_linear"
 GPT2_CHECKPOINT = "gpt2_checkpoints/model_19073.pt"
 
-MAX_LEARNING_RATE = 2e-4  
-MIN_LEARNING_RATE = 1e-4
-WEIGHT_DECAY = 0.1       
-NUM_EPOCHS = 8
-BATCH_SIZE = 128
+MAX_LEARNING_RATE = 1e-4  
+MIN_LEARNING_RATE = 5e-5
+WEIGHT_DECAY = 0.05       
+NUM_EPOCHS = 1  
+BATCH_SIZE = 256
 VAL_BATCH_SIZE = min(64, BATCH_SIZE)   
 MAX_CAPTION_LENGTH = 100
-NUM_WORKERS = 4
+NUM_WORKERS = 16
 
 LOG_EVERY_CAPT  = 3200
 EVAL_EVERY_CAPT = 32000
@@ -46,21 +46,22 @@ GPT_CONFIG = GPTConfig(
     n_layer=12,
     n_head=12,
     n_embd=768,
-    cross_attn_every=2
+    use_q_former_prefix=True
 )
 
 VISION_CONFIG = VisionEncoderConfig(
     model_name="openai/clip-vit-base-patch32",
-    projection_dim=768,
     freeze_encoder=True,
     dropout=0.1
 )
 
+
+# Device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Using device: {device}")
 
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-os.makedirs(LOG_DIR, exist_ok=True)
+#os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+#os.makedirs(LOG_DIR, exist_ok=True)
 
 torch.manual_seed(420)
 if torch.cuda.is_available():
@@ -72,10 +73,9 @@ torch.set_float32_matmul_precision('high')
 
 print("Initializing captionGPT2 model")
 
-model = captionGPT2(
-    gpt_config=GPT_CONFIG,
-    vision_config=VISION_CONFIG,
-    freeze_gpt_base=True
+model = CaptionGPT2LinearPrefix(
+    gpt_cfg=GPT_CONFIG,
+    vision_cfg=VISION_CONFIG
 )
 
 # Load pretrained GPT-2 weights
@@ -85,7 +85,23 @@ else:
     raise FileNotFoundError(f"GPT-2 checkpoint not found at {GPT2_CHECKPOINT}. Aborting.")
 
 model.to(device)
-model.get_trainable_params()
+
+# Freeze GPT-2 and vision encoder
+for p in model.gpt.parameters(): 
+    p.requires_grad = False
+for p in model.vision_encoder.parameters(): 
+    p.requires_grad = False
+
+# Train only the linear projection layer
+trainable = [p for p in model.linear_proj.parameters() if p.requires_grad]
+print(f"Trainable parameters: {sum(p.numel() for p in trainable)}")
+print("Trainable params details:")
+for n, p in model.named_parameters():
+    if p.requires_grad:
+        print(f"  {n} - {p.shape}")
+
+optimizer = torch.optim.AdamW(trainable, lr=MAX_LEARNING_RATE, betas=(0.9, 0.98), eps=1e-8, weight_decay=WEIGHT_DECAY)
+
 model = torch.compile(model)
 
 # Dataset
@@ -96,16 +112,14 @@ train_dataset = COCOCaptionDataset(
     root_dir=COCO_DATA_DIR,
     split='train',
     image_processor=model.vision_encoder.image_processor,
-    max_length=MAX_CAPTION_LENGTH,
-    feature_dir=os.path.join(FEATURE_DIR, 'train')
+    max_length=MAX_CAPTION_LENGTH
 )
 
 val_dataset = COCOCaptionDataset(
     root_dir=COCO_DATA_DIR,
     split='val',
     image_processor=model.vision_encoder.image_processor,
-    max_length=MAX_CAPTION_LENGTH,
-    feature_dir=os.path.join(FEATURE_DIR, 'val')  
+    max_length=MAX_CAPTION_LENGTH
 )
 
 train_loader = DataLoader(
@@ -113,9 +127,10 @@ train_loader = DataLoader(
     batch_size=BATCH_SIZE,
     shuffle=True,
     num_workers=NUM_WORKERS,
-    prefetch_factor=4,
     collate_fn=collate_fn,
-    pin_memory=True
+    pin_memory=True,
+    persistent_workers=True,
+    prefetch_factor=4,
 )
 
 val_loader = DataLoader(
@@ -123,9 +138,10 @@ val_loader = DataLoader(
     batch_size=VAL_BATCH_SIZE,
     shuffle=False,
     num_workers=NUM_WORKERS,
-    prefetch_factor=4,
     collate_fn=collate_fn,
-    pin_memory=True
+    pin_memory=True,
+    persistent_workers=True,
+    prefetch_factor=4,
 )
 
 print(f"Train batches: {len(train_loader)}")
@@ -133,22 +149,16 @@ print(f"Val batches: {len(val_loader)}")
 
 # Optimizer and learning rate scheduler
 
-optimizer = model.gpt.configure_optimizers(
-    weight_decay=WEIGHT_DECAY,
-    learning_rate=MAX_LEARNING_RATE,
-    device=device
-)
-
-first_epoch_steps = len(train_loader)
-total_steps = first_epoch_steps * NUM_EPOCHS
-WARMUP_FRAC = 0.05
+total_steps = len(train_loader) * NUM_EPOCHS
+WARMUP_FRAC = 0.03
 WARMUP_STEPS = int(total_steps * WARMUP_FRAC)
 
-def lr_schedule(step):
+def get_lr(step): #cosine decay with warmup
     if step < WARMUP_STEPS:
-        return MAX_LEARNING_RATE * (step + 1) / max(1, WARMUP_STEPS)
-    decay_ratio = (step - WARMUP_STEPS) / max(1, (total_steps - WARMUP_STEPS))
-    decay_ratio = min(1.0, max(0.0, decay_ratio))
+        return MAX_LEARNING_RATE * (step + 1) / WARMUP_STEPS
+    if step > total_steps:
+        return MIN_LEARNING_RATE
+    decay_ratio = (step - WARMUP_STEPS) / (total_steps - WARMUP_STEPS)
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return MIN_LEARNING_RATE + coeff * (MAX_LEARNING_RATE - MIN_LEARNING_RATE)
 
@@ -175,7 +185,7 @@ def load_checkpoint(filename):
     path = os.path.join(CHECKPOINT_DIR, filename)
     if os.path.exists(path):
         print(f"Loading checkpoint from {path}")
-        checkpoint = torch.load(path, map_location=device, weights_only=False)
+        checkpoint = torch.load(path, map_location=device)
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         return checkpoint['step'], checkpoint['epoch']
@@ -193,14 +203,14 @@ def validate(epoch, step):
             if i >= num_batches:
                 break
             
+            pixel_values = batch['pixel_values'].to(device)
             input_ids = batch['input_ids'].to(device)
             targets = batch['targets'].to(device)
-            image_features = batch['image_features'].to(device)
             
             with torch.autocast(device_type=device, dtype=torch.bfloat16):
-                logits, loss, image_context = model(pixel_values=None, input_ids=input_ids, targets=targets, image_features=image_features)
+                logits, loss, prefix = model(pixel_values, input_ids, targets)
             
-            generated = model.generate(pixel_values=None, tokenizer=tokenizer, max_length=MAX_CAPTION_LENGTH, image_context=image_context, temperature=1.0, top_k=1)
+            generated = model.generate(pixel_values, tokenizer, max_length=MAX_CAPTION_LENGTH, prefix=prefix, temperature=1.0, top_k=0)
             for j, caption in enumerate(generated):
                 img_id = i * VAL_BATCH_SIZE + j
                 ref_tokens = targets[j][targets[j] != -100].tolist()
@@ -235,7 +245,6 @@ def validate(epoch, step):
     return avg_loss
 
 # Training loop
-
 print("Starting training")
 
 # Try to resume from checkpoint
@@ -250,21 +259,21 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     for batch_idx, batch in enumerate(train_loader):
         t0 = time.time()
         
+        pixel_values = batch['pixel_values'].to(device)
         input_ids = batch['input_ids'].to(device)
         targets = batch['targets'].to(device)
-        image_features = batch['image_features'].to(device)
         
         optimizer.zero_grad()
         
         with torch.autocast(device_type=device, dtype=torch.bfloat16):
-            logits, loss, _ = model(pixel_values=None, input_ids=input_ids, targets=targets, image_features=image_features)
+            logits, loss, _ = model(pixel_values, input_ids, targets)
         
         loss.backward()
         
         norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         
         # Update weights
-        lr = lr_schedule(global_step)
+        lr = get_lr(global_step)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         optimizer.step()
@@ -285,29 +294,10 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             writer.add_scalar("Gradient_Norm", norm, global_step)
             writer.add_scalar("Throughput/tokens_per_sec", tokens_per_sec, global_step)
             writer.add_scalar("Throughput/images_per_sec", images_per_sec, global_step)
-            gate_values = []
-            dense_gate_values = []
-            for i, block in enumerate(model.gpt.transformer.h):
-                if hasattr(block, 'cross_attn_gate'):
-                    gate_val = torch.tanh(block.cross_attn_gate).abs().item()
-                    gate_values.append(gate_val)
-                    writer.add_scalar(f"GatesXAttnAbs/layer_{i}", gate_val, global_step)
-                if hasattr(block, 'dense_gate'):
-                    dense_val = torch.tanh(block.dense_gate).abs().item()
-                    dense_gate_values.append(dense_val)
-                    writer.add_scalar(f"GatesDenseAbs/layer_{i}", dense_val, global_step)
-
-            gate_avg = sum(gate_values) / len(gate_values) if gate_values else float('nan')
-            dense_gate_avg = sum(dense_gate_values) / len(dense_gate_values) if dense_gate_values else float('nan')
-
-            writer.add_scalar("GatesXAttnAbs/mean", gate_avg, global_step)
-            writer.add_scalar("GatesDenseAbs/mean", dense_gate_avg, global_step)
-
+            
             print(f"Epoch {epoch}, Step {global_step} [{(epoch+1)*batch_idx}/{NUM_EPOCHS*len(train_loader)}]: "
                   f"loss={loss.item():.4f}, lr={lr:.6f}, norm={norm:.4f}, "
-                  f"gates_x_abs_mean={gate_avg}, gates_dense_abs_mean={dense_gate_avg}, "
                   f"time={dt:.2f}s, {images_per_sec:.1f} img/s, {tokens_per_sec:.0f} tok/s")
-
         
         if global_step % EVAL_EVERY == 0 and global_step > 0: # Validate and save
             val_loss = validate(epoch, global_step)

@@ -1,4 +1,4 @@
-"""Vision encoder for image captioning"""
+"""Vision encoder for image captioning compatible with qformer"""
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
@@ -7,19 +7,17 @@ from transformers import CLIPVisionModel, CLIPImageProcessor
 @dataclass
 class VisionEncoderConfig:
     model_name: str = "openai/clip-vit-base-patch32"
-    projection_dim: int = 768  # Should match GPT n_embd
     freeze_encoder: bool = True
     dropout: float = 0.1
     projection_std: float = 0.02
 
 
 class VisionEncoder(nn.Module):
+    
     def __init__(self, config: VisionEncoderConfig):
         super().__init__()
         self.config = config
         self.model_name = config.model_name
-        self.projection_dim = config.projection_dim
-
         self.vision_model = CLIPVisionModel.from_pretrained(config.model_name)
         self.image_processor = CLIPImageProcessor.from_pretrained(config.model_name)
 
@@ -33,20 +31,9 @@ class VisionEncoder(nn.Module):
             self.vision_model.eval()
             print(f"Vision encoder frozen")
         
-        # Projection layer to match GPT-2 embedding dimension
-        self.projection = nn.Sequential(
-            nn.Linear(self.vision_hidden_size, config.projection_dim),
-            nn.LayerNorm(config.projection_dim),
-            nn.Dropout(config.dropout)
-        )
-        # Initialize projection
-        nn.init.normal_(self.projection[0].weight, std=config.projection_std)
-        nn.init.zeros_(self.projection[0].bias)
-        
         print(f"✓ VisionEncoder initialized")
         print(f"  Model: {config.model_name}")
         print(f"  Hidden size: {self.vision_hidden_size}")
-        print(f"  Output dim: {config.projection_dim}")
     
     def forward(self, pixel_values):
         # Extract features from vision model
@@ -59,11 +46,7 @@ class VisionEncoder(nn.Module):
             
             # Use last hidden state (all patch embeddings)
             # For CLIP ViT-B/32: (B, 50, 768) - 49 patches + 1 CLS token
-            image_features = outputs.last_hidden_state #(B, num_patches, projection_dim)
-        
-        # Project to GPT-2 embedding space
-        image_features = self.projection(image_features)
-        
+            image_features = outputs.last_hidden_state #(B, num_patches, hidden_dim)
         return image_features
     
     def preprocess_images(self, images):
