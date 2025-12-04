@@ -44,7 +44,6 @@ VISION_CONFIG = VisionEncoderConfig(
     dropout=0.1
 )
 
-# Device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Using device: {device}")
 
